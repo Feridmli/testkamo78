@@ -8,28 +8,13 @@ import { Seaport } from "@opensea/seaport-js";
 // SABİTLƏR (CONSTANTS)
 // ==========================================
 
-const ItemType = {
-    NATIVE: 0,
-    ERC20: 1,
-    ERC721: 2,
-    ERC1155: 3
-};
-
-const OrderType = {
-    FULL_OPEN: 0,
-    PARTIAL_OPEN: 1,
-    FULL_RESTRICTED: 2,
-    PARTIAL_RESTRICTED: 3
-};
-
-// ==========================================
-// KONFIQURASIYA
-// ==========================================
+const ItemType = { NATIVE: 0, ERC20: 1, ERC721: 2, ERC1155: 3 };
+const OrderType = { FULL_OPEN: 0, PARTIAL_OPEN: 1, FULL_RESTRICTED: 2, PARTIAL_RESTRICTED: 3 };
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://testkamo78.onrender.com";
 const NFT_CONTRACT_ADDRESS = import.meta.env.VITE_NFT_CONTRACT || "0x54a88333f6e7540ea982261301309048ac431ed5";
 
-// Seaport 1.6 Canonical Address
+// Seaport Address
 const SEAPORT_ADDRESS = "0x0000000000000068f116a894984e2db1123eb395"; 
 
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -38,20 +23,19 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const APECHAIN_ID = 33139;
 const APECHAIN_ID_HEX = "0x8173";
 
-// IPFS Gateway
-const DEFAULT_IPFS_GATEWAY = "https://ipfs.io/ipfs/"; 
-const DEFAULT_IMAGE_CID = "QmWxidQSTpbJgbZxkNBuztAuzgTpueXe4LSmUraZXCf4v8"; 
-const FALLBACK_IMAGE_URL = `${DEFAULT_IPFS_GATEWAY}${DEFAULT_IMAGE_CID}`;
+// IPFS
+const FALLBACK_IMAGE_URL = "https://ipfs.io/ipfs/QmWxidQSTpbJgbZxkNBuztAuzgTpueXe4LSmUraZXCf4v8";
 
+// Global Variables
 let provider = null;
 let signer = null;
 let seaport = null;
 let userAddress = null;
 
 let selectedTokens = new Set();
-let allNFTs = []; // Axtarış üçün bütün NFT-ləri burada saxlayırıq
+let allNFTs = []; // Lokal verilənlər bazamız
 
-// UI Elementləri
+// UI Elements
 const connectBtn = document.getElementById("connectBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
 const addrSpan = document.getElementById("addr");
@@ -61,8 +45,6 @@ const bulkBar = document.getElementById("bulkBar");
 const bulkCount = document.getElementById("bulkCount");
 const bulkPriceInp = document.getElementById("bulkPrice");
 const bulkListBtn = document.getElementById("bulkListBtn");
-
-// Yeni UI Elementləri (Search & Stats)
 const searchInput = document.getElementById("searchInput");
 const totalVolEl = document.getElementById("totalVol");
 const dayVolEl = document.getElementById("dayVol");
@@ -75,7 +57,6 @@ const itemsCountEl = document.getElementById("itemsCount");
 function notify(msg, timeout = 3000) {
   if (!noticeDiv) return;
   noticeDiv.textContent = msg;
-  console.log(`[NOTIFY]: ${msg}`);
   if (timeout) setTimeout(() => { if (noticeDiv.textContent === msg) noticeDiv.textContent = ""; }, timeout);
 }
 
@@ -83,7 +64,6 @@ function resolveIPFS(url) {
   if (!url) return FALLBACK_IMAGE_URL;
   const GATEWAY = "https://ipfs.io/ipfs/";
   let originalUrl = url;
-
   if (originalUrl.startsWith("ipfs://")) {
     originalUrl = originalUrl.replace("ipfs://", GATEWAY);
   } else if (originalUrl.startsWith("Qm") && !originalUrl.startsWith("http")) {
@@ -97,13 +77,11 @@ function cleanOrder(orderData) {
     const order = orderData.order || orderData;
     const { parameters, signature } = order;
     if (!parameters) return null;
-
     const toStr = (val) => {
         if (val === undefined || val === null) return "0";
         if (typeof val === "object" && val.hex) return BigInt(val.hex).toString();
         return val.toString();
     };
-
     return {
       parameters: {
         offerer: parameters.offerer,
@@ -123,8 +101,7 @@ function cleanOrder(orderData) {
         salt: toStr(parameters.salt), conduitKey: parameters.conduitKey,
         counter: toStr(parameters.counter),
         totalOriginalConsiderationItems: Number(parameters.totalOriginalConsiderationItems || parameters.consideration.length)
-      },
-      signature: signature
+      }, signature: signature
     };
   } catch (e) { return null; }
 }
@@ -167,7 +144,6 @@ async function connectWallet() {
     await provider.send("eth_requestAccounts", []);
     signer = provider.getSigner();
 
-    // Ethers v5 fix
     if (!signer.signTypedData) {
         signer.signTypedData = async (domain, types, value) => {
             const typesCopy = { ...types }; delete typesCopy.EIP712Domain; 
@@ -186,10 +162,12 @@ async function connectWallet() {
     addrSpan.textContent = `Wallet: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
     notify("Cüzdan qoşuldu!");
 
+    // Cüzdan dəyişəndə yenə reload edirik
     window.ethereum.on("accountsChanged", () => location.reload());
-    window.ethereum.on("chainChanged", () => location.reload());
-
-    await loadNFTs();
+    
+    // Qoşulduqdan sonra kartları yeniləyirik (List/Buy düymələrini aktiv etmək üçün)
+    renderNFTs(allNFTs);
+    
   } catch (err) { 
       console.error(err);
       alert("Connect xətası: " + err.message); 
@@ -201,14 +179,14 @@ disconnectBtn.onclick = () => {
   connectBtn.style.display = "inline-block";
   disconnectBtn.style.display = "none";
   addrSpan.textContent = "";
-  marketplaceDiv.innerHTML = "";
+  renderNFTs(allNFTs); // Cüzdansız rejimə keçid
   notify("Çıxış edildi");
 };
 
 connectBtn.onclick = connectWallet;
 
 // ==========================================
-// DATA FETCHING (STATS & NFT)
+// DATA YÜKLƏMƏ
 // ==========================================
 
 async function fetchStats() {
@@ -216,7 +194,6 @@ async function fetchStats() {
     try {
         const res = await fetch(`${BACKEND_URL}/api/stats`);
         const data = await res.json();
-        
         if(data.success) {
             const fmt = (val) => parseFloat(val).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
             totalVolEl.innerText = `${fmt(data.totalVolume)} APE`;
@@ -227,21 +204,15 @@ async function fetchStats() {
 
 async function loadNFTs() {
   marketplaceDiv.innerHTML = "<p style='color:black; width:100%; text-align:center;'>NFT-lər yüklənir...</p>";
-  
   selectedTokens.clear();
   updateBulkUI();
-  
-  // Statistikaları yenilə
   fetchStats();
 
   try {
     const res = await fetch(`${BACKEND_URL}/api/nfts`);
     const data = await res.json();
     allNFTs = data.nfts || [];
-
-    // Bütün NFT-ləri render et
     renderNFTs(allNFTs);
-
   } catch (err) {
     console.error(err);
     marketplaceDiv.innerHTML = "<p style='color:red; text-align:center;'>Yüklənmə xətası.</p>";
@@ -249,70 +220,61 @@ async function loadNFTs() {
 }
 
 // ==========================================
-// RENDER FUNCTION (HTML GENERATION)
+// RENDER & HTML GENERATION (YENİ)
 // ==========================================
 
-function renderNFTs(list) {
-    marketplaceDiv.innerHTML = "";
-    if (itemsCountEl) itemsCountEl.innerText = list.length;
+// Tək bir kartı yaradan funksiya (Reloadsız yeniləmə üçün vacibdir)
+function createCardElement(nft) {
+    const tokenidRaw = (nft.tokenid !== undefined && nft.tokenid !== null) ? nft.tokenid : nft.tokenId;
+    if (tokenidRaw === undefined || tokenidRaw === null) return null;
+    const tokenid = tokenidRaw.toString(); 
 
-    if (list.length === 0) {
-      marketplaceDiv.innerHTML = "<p style='color:black; width:100%; text-align:center;'>NFT tapılmadı.</p>";
-      return;
-    }
+    const name = nft.name || `NFT #${tokenid}`;
+    const image = resolveIPFS(nft.image);
+    
+    let displayPrice = "";
+    let priceVal = 0;
+    let isListed = false;
 
-    list.forEach(nft => {
-      const tokenidRaw = (nft.tokenid !== undefined && nft.tokenid !== null) ? nft.tokenid : nft.tokenId;
-      if (tokenidRaw === undefined || tokenidRaw === null) return;
-      const tokenid = tokenidRaw.toString(); 
-
-      const name = nft.name || `NFT #${tokenid}`;
-      const image = resolveIPFS(nft.image);
-      
-      let displayPrice = "";
-      let priceVal = 0;
-      let isListed = false;
-
-      if (nft.price && parseFloat(nft.price) > 0) {
+    if (nft.price && parseFloat(nft.price) > 0) {
         priceVal = parseFloat(nft.price);
         displayPrice = `${priceVal} APE`;
         isListed = true;
-      }
+    }
 
-      // Sahiblik yoxlanışı (Cüzdan qoşulubsa)
-      let canManage = false;
-      if (userAddress) {
-          // Bazadakı məlumatlara əsasən yoxlayırıq
-          if (nft.seller_address && nft.seller_address.toLowerCase() === userAddress) canManage = true; // Satışdadır və mənimdir
-          else if (nft.buyer_address && nft.buyer_address.toLowerCase() === userAddress) canManage = true; // Satışda deyil, mənimdir
-      }
+    let canManage = false;
+    if (userAddress) {
+        if (nft.seller_address && nft.seller_address.toLowerCase() === userAddress) canManage = true; 
+        else if (nft.buyer_address && nft.buyer_address.toLowerCase() === userAddress) canManage = true;
+    }
 
-      const card = document.createElement("div");
-      card.className = "nft-card";
-      
-      let checkboxHTML = canManage ? `<input type="checkbox" class="select-box" data-id="${tokenid}">` : "";
+    const card = document.createElement("div");
+    card.className = "nft-card";
+    card.id = `card-${tokenid}`; // Kartı tapmaq üçün ID veririk
 
-      let actionsHTML = "";
-      if (isListed) {
-          if (canManage) {
-              actionsHTML = `
-                <div style="font-size:12px; color:green;">Listed</div>
+    let checkboxHTML = canManage ? `<input type="checkbox" class="select-box" data-id="${tokenid}">` : "";
+
+    let actionsHTML = "";
+    if (isListed) {
+        if (canManage) {
+            actionsHTML = `
+                <div style="font-size:12px; color:green; margin-bottom:5px;">Listed: ${displayPrice}</div>
                 <input type="number" placeholder="New Price" class="mini-input price-input" step="0.001">
                 <button class="action-btn btn-list update-btn">Update</button>
-              `;
-          } else {
-              actionsHTML = `<button class="action-btn btn-buy buy-btn">Buy</button>`;
-          }
-      } else {
-          if (canManage) {
-              actionsHTML = `
-                 <input type="number" placeholder="Price" class="mini-input price-input" step="0.001">
-                 <button class="action-btn btn-list list-btn">List</button>
-              `;
-          }
-      }
+            `;
+        } else {
+            actionsHTML = `<button class="action-btn btn-buy buy-btn">Buy</button>`;
+        }
+    } else {
+        if (canManage) {
+            actionsHTML = `
+                <input type="number" placeholder="Price" class="mini-input price-input" step="0.001">
+                <button class="action-btn btn-list list-btn">List</button>
+            `;
+        }
+    }
 
-      card.innerHTML = `
+    card.innerHTML = `
         ${checkboxHTML}
         <div class="card-image-wrapper">
             <img src="${image}" loading="lazy" decoding="async" onerror="this.onerror=null; this.src='${FALLBACK_IMAGE_URL}'">
@@ -320,42 +282,71 @@ function renderNFTs(list) {
         <div class="card-content">
             <div class="card-title">${name}</div>
             <div class="card-details">
-                 ${displayPrice ? `<div class="price-val">${displayPrice}</div>` : `<div style="height:24px"></div>`}
+                 ${displayPrice && !canManage ? `<div class="price-val">${displayPrice}</div>` : `<div style="height:24px"></div>`}
             </div>
             <div class="card-actions">
                 ${actionsHTML}
             </div>
         </div>
-      `;
-      marketplaceDiv.appendChild(card);
+    `;
 
-      // Event Listeners (Card içi)
-      const chk = card.querySelector(".select-box");
-      if (chk) {
-          chk.onchange = (e) => {
-              if (e.target.checked) selectedTokens.add(tokenid);
-              else selectedTokens.delete(tokenid);
-              updateBulkUI();
-          };
-      }
+    // Event Listeners
+    const chk = card.querySelector(".select-box");
+    if (chk) {
+        chk.checked = selectedTokens.has(tokenid);
+        chk.onchange = (e) => {
+            if (e.target.checked) selectedTokens.add(tokenid);
+            else selectedTokens.delete(tokenid);
+            updateBulkUI();
+        };
+    }
 
-      if (actionsHTML !== "") {
-          const priceInput = card.querySelector(".price-input");
-          
-          if (isListed && !canManage) {
-             const btn = card.querySelector(".buy-btn");
-             if(btn) btn.onclick = async () => await buyNFT(nft);
-          } else {
-             const btn = card.querySelector(".list-btn") || card.querySelector(".update-btn");
-             if(btn) btn.onclick = async () => {
-                 let inp = priceInput.value;
-                 if(inp) inp = inp.trim();
-                 if(!inp || isNaN(inp) || parseFloat(inp) <= 0) return notify("Düzgün qiymət yazın!");
-                 await listNFT(tokenid, inp);
-             };
-          }
-      }
+    // Button Listeners
+    if (isListed && !canManage) {
+        const btn = card.querySelector(".buy-btn");
+        if(btn) btn.onclick = async () => await buyNFT(nft);
+    } else {
+        const btn = card.querySelector(".list-btn") || card.querySelector(".update-btn");
+        if(btn) btn.onclick = async () => {
+            const priceInput = card.querySelector(".price-input");
+            let inp = priceInput.value;
+            if(inp) inp = inp.trim();
+            if(!inp || isNaN(inp) || parseFloat(inp) <= 0) return notify("Düzgün qiymət yazın!");
+            await listNFT(tokenid, inp);
+        };
+    }
+
+    return card;
+}
+
+function renderNFTs(list) {
+    marketplaceDiv.innerHTML = "";
+    if (itemsCountEl) itemsCountEl.innerText = list.length;
+
+    if (list.length === 0) {
+        marketplaceDiv.innerHTML = "<p style='color:black; width:100%; text-align:center;'>NFT tapılmadı.</p>";
+        return;
+    }
+
+    list.forEach(nft => {
+        const cardElement = createCardElement(nft);
+        if(cardElement) marketplaceDiv.appendChild(cardElement);
     });
+}
+
+// Səhifəni yeniləmədən tək bir kartı yeniləmək üçün funksiya
+function refreshSingleCard(tokenid) {
+    const nftData = allNFTs.find(n => n.tokenid == tokenid);
+    if (!nftData) return;
+
+    const oldCard = document.getElementById(`card-${tokenid}`);
+    const newCard = createCardElement(nftData);
+
+    if (oldCard && newCard) {
+        oldCard.replaceWith(newCard); // Köhnə kartı yenisi ilə əvəz edirik (Reloadsız)
+    } else if (!oldCard && newCard) {
+        marketplaceDiv.appendChild(newCard); 
+    }
 }
 
 // ==========================================
@@ -364,14 +355,11 @@ function renderNFTs(list) {
 if (searchInput) {
     searchInput.addEventListener('input', (e) => {
         const query = e.target.value.toLowerCase();
-        
-        // Lokal filtr (Sürətli)
         const filtered = allNFTs.filter(nft => {
             const name = (nft.name || "").toLowerCase();
             const tid = (nft.tokenid ?? nft.tokenId).toString();
             return name.includes(query) || tid.includes(query);
         });
-        
         renderNFTs(filtered);
     });
 }
@@ -399,9 +387,8 @@ if(bulkListBtn) {
     bulkListBtn.onclick = async () => {
         let priceVal = bulkPriceInp.value;
         if(priceVal) priceVal = priceVal.trim();
-        if (!priceVal || isNaN(priceVal) || parseFloat(priceVal) <= 0) return alert("Toplu satış üçün düzgün qiymət yazın.");
-        const tokensArray = Array.from(selectedTokens);
-        await bulkListNFTs(tokensArray, priceVal);
+        if (!priceVal || isNaN(priceVal) || parseFloat(priceVal) <= 0) return alert("Qiymət yazın.");
+        await bulkListNFTs(Array.from(selectedTokens), priceVal);
     };
 }
 
@@ -453,13 +440,17 @@ async function bulkListNFTs(tokenIds, priceInEth) {
         const { executeAllActions } = await seaport.createBulkOrders(orderInputs, seller);
         const signedOrders = await executeAllActions(); 
 
-        notify("İmza alındı! Bazaya yazılır...");
+        notify("İmza alındı! UI yenilənir...");
 
+        // ====================================================
+        // RELOAD YERİNƏ LOCAL UPDATE (Səhifəni yeniləmirik)
+        // ====================================================
         for (const order of signedOrders) {
             const offerItem = order.parameters.offer[0];
             const tokenStr = offerItem.identifierOrCriteria;
 
-            await fetch(`${BACKEND_URL}/api/order`, {
+            // 1. Bazaya göndəririk (Arxa planda)
+            fetch(`${BACKEND_URL}/api/order`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     tokenid: tokenStr,
@@ -470,10 +461,20 @@ async function bulkListNFTs(tokenIds, priceInEth) {
                     status: "active"
                 }),
             });
+
+            // 2. Lokal "allNFTs" massivini yeniləyirik
+            const nftIndex = allNFTs.findIndex(n => n.tokenid == tokenStr);
+            if (nftIndex !== -1) {
+                allNFTs[nftIndex].price = priceInEth;
+                allNFTs[nftIndex].seller_address = seller.toLowerCase();
+                allNFTs[nftIndex].seaport_order = orderToJsonSafe(order); 
+            }
+
+            // 3. UI-da yalnız bu kartı yeniləyirik
+            refreshSingleCard(tokenStr);
         }
 
-        notify(`Tamamlandı!`);
-        setTimeout(() => location.reload(), 1500);
+        notify("Uğurla listələndi!");
 
     } catch (err) {
         console.error("List Error:", err);
@@ -491,7 +492,6 @@ async function buyNFT(nftRecord) {
     try {
         const buyerAddress = await signer.getAddress();
         
-        // Lokal yoxlama
         if (nftRecord.seller_address && nftRecord.seller_address.toLowerCase() === buyerAddress.toLowerCase()) {
              return alert("Bu NFT artıq sizindir (Satışdasınız).");
         }
@@ -499,7 +499,6 @@ async function buyNFT(nftRecord) {
         notify("Order hazırlanır...");
         let rawJson = nftRecord.seaport_order;
         if (!rawJson) return alert("Order tapılmadı.");
-        
         if (typeof rawJson === "string") { try { rawJson = JSON.parse(rawJson); } catch (e) {} }
 
         const cleanOrd = cleanOrder(rawJson);
@@ -526,20 +525,39 @@ async function buyNFT(nftRecord) {
 
         notify("Blokçeyndə təsdiqlənir...");
         await tx.wait();
-        notify("Uğurlu alış!");
-
-        // VOLUME API UPDATE
-        await fetch(`${BACKEND_URL}/api/buy`, {
+        
+        // ====================================================
+        // RELOAD YERİNƏ LOCAL UPDATE (Səhifəni yeniləmirik)
+        // ====================================================
+        
+        // 1. Bazaya məlumat göndəririk
+        fetch(`${BACKEND_URL}/api/buy`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
                 tokenid: nftRecord.tokenid, 
                 order_hash: nftRecord.order_hash, 
                 buyer_address: buyerAddress,
-                price: nftRecord.price, // Volume üçün vacibdir
-                seller: nftRecord.seller_address // Volume üçün vacibdir
+                price: nftRecord.price, 
+                seller: nftRecord.seller_address 
             }),
         });
-        setTimeout(() => location.reload(), 2000);
+        
+        notify("Uğurlu alış! UI yenilənir...");
+
+        // 2. Lokal "allNFTs" massivini yeniləyirik
+        const nftIndex = allNFTs.findIndex(n => n.tokenid == nftRecord.tokenid);
+        if (nftIndex !== -1) {
+            allNFTs[nftIndex].price = 0; // Satışdan çıxdı
+            allNFTs[nftIndex].seller_address = null;
+            allNFTs[nftIndex].buyer_address = buyerAddress.toLowerCase();
+            allNFTs[nftIndex].seaport_order = null;
+        }
+
+        // 3. UI-da yalnız bu kartı yeniləyirik
+        refreshSingleCard(nftRecord.tokenid);
+
+        // 4. Statistikanı (Volume) yeniləyirik
+        fetchStats();
 
     } catch (err) {
         console.error("Buy Error:", err);
@@ -547,7 +565,7 @@ async function buyNFT(nftRecord) {
     }
 }
 
-// Başlanğıc Yükləmə (Cüzdan qoşulmasa belə vitrin görünsün)
+// Başlanğıc Yükləmə
 loadNFTs();
 
 window.loadNFTs = loadNFTs;
