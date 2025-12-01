@@ -13,29 +13,25 @@ const OrderType = { FULL_OPEN: 0, PARTIAL_OPEN: 1, FULL_RESTRICTED: 2, PARTIAL_R
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://testkamo78.onrender.com";
 const NFT_CONTRACT_ADDRESS = import.meta.env.VITE_NFT_CONTRACT || "0x54a88333f6e7540ea982261301309048ac431ed5";
-
-// Seaport Address
 const SEAPORT_ADDRESS = "0x0000000000000068f116a894984e2db1123eb395"; 
-
 const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
 const APECHAIN_ID = 33139;
 const APECHAIN_ID_HEX = "0x8173";
 
-// IPFS
-const FALLBACK_IMAGE_URL = "https://ipfs.io/ipfs/QmWxidQSTpbJgbZxkNBuztAuzgTpueXe4LSmUraZXCf4v8";
+const DEFAULT_IPFS_GATEWAY = "https://ipfs.io/ipfs/"; 
+const DEFAULT_IMAGE_CID = "QmWxidQSTpbJgbZxkNBuztAuzgTpueXe4LSmUraZXCf4v8"; 
+const FALLBACK_IMAGE_URL = `${DEFAULT_IPFS_GATEWAY}${DEFAULT_IMAGE_CID}`;
 
-// Global Variables
 let provider = null;
 let signer = null;
 let seaport = null;
 let userAddress = null;
 
 let selectedTokens = new Set();
-let allNFTs = []; // Lokal verilənlər bazamız
+let allNFTs = [];
 
-// UI Elements
+// UI Elementləri
 const connectBtn = document.getElementById("connectBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
 const addrSpan = document.getElementById("addr");
@@ -45,6 +41,8 @@ const bulkBar = document.getElementById("bulkBar");
 const bulkCount = document.getElementById("bulkCount");
 const bulkPriceInp = document.getElementById("bulkPrice");
 const bulkListBtn = document.getElementById("bulkListBtn");
+
+// Stats & Search
 const searchInput = document.getElementById("searchInput");
 const totalVolEl = document.getElementById("totalVol");
 const dayVolEl = document.getElementById("dayVol");
@@ -57,6 +55,7 @@ const itemsCountEl = document.getElementById("itemsCount");
 function notify(msg, timeout = 3000) {
   if (!noticeDiv) return;
   noticeDiv.textContent = msg;
+  console.log(`[NOTIFY]: ${msg}`);
   if (timeout) setTimeout(() => { if (noticeDiv.textContent === msg) noticeDiv.textContent = ""; }, timeout);
 }
 
@@ -117,12 +116,33 @@ function orderToJsonSafe(obj) {
 }
 
 // ==========================================
-// CÜZDAN QOŞULMASI
+// CÜZDAN İDARƏSİ (DİNAMİK)
 // ==========================================
+
+// Cüzdanı sıfırlayan funksiya (Reload etmədən)
+function disconnectWalletUI() {
+    provider = null;
+    signer = null;
+    seaport = null;
+    userAddress = null;
+    
+    connectBtn.style.display = "inline-block";
+    disconnectBtn.style.display = "none";
+    addrSpan.textContent = "";
+    
+    selectedTokens.clear();
+    updateBulkUI();
+    
+    // Cüzdan çıxanda kartları yeniləyirik (Buy/Sell düymələrini gizlətmək üçün)
+    renderNFTs(allNFTs);
+    notify("Çıxış edildi");
+}
 
 async function connectWallet() {
   try {
     if (!window.ethereum) return alert("Metamask tapılmadı!");
+    
+    // Provayderi hər dəfə yeniləyirik
     provider = new ethers.providers.Web3Provider(window.ethereum, "any");
     
     const { chainId } = await provider.getNetwork();
@@ -144,6 +164,7 @@ async function connectWallet() {
     await provider.send("eth_requestAccounts", []);
     signer = provider.getSigner();
 
+    // Ethers v5 fix
     if (!signer.signTypedData) {
         signer.signTypedData = async (domain, types, value) => {
             const typesCopy = { ...types }; delete typesCopy.EIP712Domain; 
@@ -160,27 +181,44 @@ async function connectWallet() {
     connectBtn.style.display = "none";
     disconnectBtn.style.display = "inline-block";
     addrSpan.textContent = `Wallet: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
+    
     notify("Cüzdan qoşuldu!");
 
-    // Cüzdan dəyişəndə yenə reload edirik
-    window.ethereum.on("accountsChanged", () => location.reload());
-    
     // Qoşulduqdan sonra kartları yeniləyirik (List/Buy düymələrini aktiv etmək üçün)
     renderNFTs(allNFTs);
     
   } catch (err) { 
       console.error(err);
-      alert("Connect xətası: " + err.message); 
+      // Səssiz xəta (istifadəçi imtina edərsə bezdirməsin)
+      if (!err.message.includes("User rejected")) alert("Connect xətası: " + err.message); 
   }
 }
 
+// -----------------------------------------------------
+// EVENT LISTENERLER (RELOAD OLUNMAMASI ÜÇÜN DƏYİŞDİRİLDİ)
+// -----------------------------------------------------
+
+if (window.ethereum) {
+    // Hesab dəyişəndə reload YOX, sadəcə funksiyaları yenidən çağırırıq
+    window.ethereum.on("accountsChanged", async (accounts) => {
+        if (accounts.length === 0) {
+            // İstifadəçi Metamask-dan "Disconnect" edibsə
+            disconnectWalletUI();
+        } else {
+            // Hesab dəyişibsə, yeni hesabla qoşul
+            notify("Hesab dəyişdirildi...");
+            await connectWallet();
+        }
+    });
+
+    // Zəncir dəyişəndə reload etmək məsləhətdir (texniki səbəblərdən), 
+    // amma istəyirsinizsə bunu da reload-sız edə bilərik. 
+    // İndilik təhlükəsizlik üçün reload saxlayıram, çünki ApeChain-dən çıxsa işləməyəcək.
+    window.ethereum.on("chainChanged", () => location.reload());
+}
+
 disconnectBtn.onclick = () => {
-  provider = signer = seaport = userAddress = null;
-  connectBtn.style.display = "inline-block";
-  disconnectBtn.style.display = "none";
-  addrSpan.textContent = "";
-  renderNFTs(allNFTs); // Cüzdansız rejimə keçid
-  notify("Çıxış edildi");
+  disconnectWalletUI();
 };
 
 connectBtn.onclick = connectWallet;
@@ -223,7 +261,6 @@ async function loadNFTs() {
 // RENDER & HTML GENERATION (YENİ)
 // ==========================================
 
-// Tək bir kartı yaradan funksiya (Reloadsız yeniləmə üçün vacibdir)
 function createCardElement(nft) {
     const tokenidRaw = (nft.tokenid !== undefined && nft.tokenid !== null) ? nft.tokenid : nft.tokenId;
     if (tokenidRaw === undefined || tokenidRaw === null) return null;
@@ -250,7 +287,7 @@ function createCardElement(nft) {
 
     const card = document.createElement("div");
     card.className = "nft-card";
-    card.id = `card-${tokenid}`; // Kartı tapmaq üçün ID veririk
+    card.id = `card-${tokenid}`; 
 
     let checkboxHTML = canManage ? `<input type="checkbox" class="select-box" data-id="${tokenid}">` : "";
 
@@ -343,7 +380,7 @@ function refreshSingleCard(tokenid) {
     const newCard = createCardElement(nftData);
 
     if (oldCard && newCard) {
-        oldCard.replaceWith(newCard); // Köhnə kartı yenisi ilə əvəz edirik (Reloadsız)
+        oldCard.replaceWith(newCard); 
     } else if (!oldCard && newCard) {
         marketplaceDiv.appendChild(newCard); 
     }
