@@ -24,19 +24,18 @@ const APECHAIN_ID = 33139;
 const APECHAIN_ID_HEX = "0x8173";
 
 // IPFS
-const DEFAULT_IPFS_GATEWAY = "https://ipfs.io/ipfs/"; 
-const DEFAULT_IMAGE_CID = "QmWxidQSTpbJgbZxkNBuztAuzgTpueXe4LSmUraZXCf4v8"; 
-const FALLBACK_IMAGE_URL = `${DEFAULT_IPFS_GATEWAY}${DEFAULT_IMAGE_CID}`;
+const FALLBACK_IMAGE_URL = "https://ipfs.io/ipfs/QmWxidQSTpbJgbZxkNBuztAuzgTpueXe4LSmUraZXCf4v8";
 
+// Global Variables
 let provider = null;
 let signer = null;
 let seaport = null;
 let userAddress = null;
 
 let selectedTokens = new Set();
-let allNFTs = [];
+let allNFTs = []; // Lokal verilənlər bazamız
 
-// UI Elementləri
+// UI Elements
 const connectBtn = document.getElementById("connectBtn");
 const disconnectBtn = document.getElementById("disconnectBtn");
 const addrSpan = document.getElementById("addr");
@@ -46,8 +45,6 @@ const bulkBar = document.getElementById("bulkBar");
 const bulkCount = document.getElementById("bulkCount");
 const bulkPriceInp = document.getElementById("bulkPrice");
 const bulkListBtn = document.getElementById("bulkListBtn");
-
-// Stats & Search
 const searchInput = document.getElementById("searchInput");
 const totalVolEl = document.getElementById("totalVol");
 const dayVolEl = document.getElementById("dayVol");
@@ -60,7 +57,6 @@ const itemsCountEl = document.getElementById("itemsCount");
 function notify(msg, timeout = 3000) {
   if (!noticeDiv) return;
   noticeDiv.textContent = msg;
-  console.log(`[NOTIFY]: ${msg}`);
   if (timeout) setTimeout(() => { if (noticeDiv.textContent === msg) noticeDiv.textContent = ""; }, timeout);
 }
 
@@ -121,39 +117,57 @@ function orderToJsonSafe(obj) {
 }
 
 // ==========================================
-// CÜZDAN İDARƏSİ (DİNAMİK)
+// CÜZDAN QOŞULMASI (YENİLƏNMİŞ - RELOADSIZ)
 // ==========================================
 
-function disconnectWalletUI() {
-    provider = null;
-    signer = null;
-    seaport = null;
-    userAddress = null;
+// Çıxış funksiyası
+function handleDisconnect() {
+  provider = null;
+  signer = null;
+  seaport = null;
+  userAddress = null;
+
+  connectBtn.style.display = "inline-block";
+  disconnectBtn.style.display = "none";
+  addrSpan.textContent = "";
+  
+  // UI-ı yenilə (Buttonlar "Buy"-a çevrilir, "List" yox olur)
+  renderNFTs(allNFTs); 
+  notify("Çıxış edildi");
+}
+
+// Hesab dəyişəndə işləyən funksiya (Reload etmədən)
+async function handleAccountsChanged(accounts) {
+  if (accounts.length === 0) {
+    // Əgər istifadəçi MetaMask-dan tamamilə çıxış edibsə
+    handleDisconnect();
+  } else {
+    // Əgər istifadəçi başqa hesaba keçibsə
+    userAddress = accounts[0].toLowerCase();
     
-    connectBtn.style.display = "inline-block";
-    disconnectBtn.style.display = "none";
-    addrSpan.textContent = "";
+    // Signer və Seaport-u təzə hesab üçün yeniləyirik
+    if (provider) {
+        signer = provider.getSigner();
+        seaport = new Seaport(signer, { 
+            overrides: { contractAddress: SEAPORT_ADDRESS, defaultConduitKey: ZERO_BYTES32 } 
+        });
+    }
+
+    addrSpan.textContent = `Wallet: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
+    notify("Hesab dəyişildi!");
     
-    selectedTokens.clear();
-    updateBulkUI();
+    // Düymələri yeniləyirik (Buttonlar sahibə görə dəyişsin)
+    connectBtn.style.display = "none";
+    disconnectBtn.style.display = "inline-block";
     renderNFTs(allNFTs);
-    notify("Çıxış edildi");
+  }
 }
 
 async function connectWallet() {
-  // 1. Ethereum Obyektini Yoxla
-  if (typeof window.ethereum === 'undefined') {
-      return alert("Metamask tapılmadı! Telefonda isinizsə, zəhmət olmasa MetaMask tətbiqinin daxilindəki Brauzerdən daxil olun.");
-  }
-
   try {
-    // 2. Provider yaratmağa çalışırıq (Sənin xətan burada baş verir)
-    try {
-        provider = new ethers.providers.Web3Provider(window.ethereum, "any");
-    } catch (e) {
-        console.error("Provider init error:", e);
-        return alert("Brauzer dəstəklənmir. Zəhmət olmasa MetaMask App Browser və ya PC istifadə edin.");
-    }
+    if (!window.ethereum) return alert("Metamask tapılmadı!");
+    
+    provider = new ethers.providers.Web3Provider(window.ethereum, "any");
     
     const { chainId } = await provider.getNetwork();
     if (chainId !== APECHAIN_ID) {
@@ -171,67 +185,32 @@ async function connectWallet() {
       } catch (e) { return alert("ApeChain şəbəkəsinə keçilmədi."); }
     }
 
-    await provider.send("eth_requestAccounts", []);
-    signer = provider.getSigner();
+    const accounts = await provider.send("eth_requestAccounts", []);
+    
+    // İlk qoşulma məntiqi
+    await handleAccountsChanged(accounts);
 
-    // Ethers v5 fix
-    if (!signer.signTypedData) {
+    // Sign Typed Data fix
+    if (signer && !signer.signTypedData) {
         signer.signTypedData = async (domain, types, value) => {
             const typesCopy = { ...types }; delete typesCopy.EIP712Domain; 
             return await signer._signTypedData(domain, typesCopy, value);
         };
     }
-
-    userAddress = (await signer.getAddress()).toLowerCase();
-    
-    seaport = new Seaport(signer, { 
-        overrides: { contractAddress: SEAPORT_ADDRESS, defaultConduitKey: ZERO_BYTES32 } 
-    });
-    
-    connectBtn.style.display = "none";
-    disconnectBtn.style.display = "inline-block";
-    addrSpan.textContent = `Wallet: ${userAddress.slice(0, 6)}...${userAddress.slice(-4)}`;
     
     notify("Cüzdan qoşuldu!");
-    renderNFTs(allNFTs);
-    
+
+    // === RELOAD ƏVƏZİNƏ EVENT LISTENER ===
+    window.ethereum.removeListener("accountsChanged", handleAccountsChanged); // Dublikat olmasın deyə əvvəlcə silirik
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+
   } catch (err) { 
       console.error(err);
-      if (err.message && err.message.includes("webkit")) {
-          alert("Xəta: Zəhmət olmasa saytı MetaMask tətbiqinin daxilindəki brauzerdə açın (iOS Safari dəstəklənmir).");
-      } else if (!err.message.includes("User rejected")) {
-          alert("Connect xətası: " + err.message);
-      }
+      alert("Connect xətası: " + err.message); 
   }
 }
 
-// -----------------------------------------------------
-// EVENT LISTENERLER
-// -----------------------------------------------------
-
-if (window.ethereum) {
-    window.ethereum.on("accountsChanged", async (accounts) => {
-        if (accounts.length === 0) {
-            disconnectWalletUI();
-        } else {
-            notify("Hesab dəyişdirildi...");
-            // Avtomatik yenidən qoşulma cəhdi
-            await connectWallet();
-        }
-    });
-
-    // Zəncir dəyişikliyi bəzən provideri qırdığı üçün reload tövsiyə edilir, 
-    // amma "reload olmasın" dediyin üçün sadəcə xəbərdarlıq edirik və ya yenidən qoşuruq.
-    window.ethereum.on("chainChanged", () => {
-         notify("Şəbəkə dəyişdi, yenidən yüklənir...");
-         setTimeout(() => location.reload(), 1000); 
-    });
-}
-
-disconnectBtn.onclick = () => {
-  disconnectWalletUI();
-};
-
+disconnectBtn.onclick = handleDisconnect;
 connectBtn.onclick = connectWallet;
 
 // ==========================================
@@ -269,9 +248,10 @@ async function loadNFTs() {
 }
 
 // ==========================================
-// RENDER & HTML GENERATION
+// RENDER & HTML GENERATION (YENİ)
 // ==========================================
 
+// Tək bir kartı yaradan funksiya (Reloadsız yeniləmə üçün vacibdir)
 function createCardElement(nft) {
     const tokenidRaw = (nft.tokenid !== undefined && nft.tokenid !== null) ? nft.tokenid : nft.tokenId;
     if (tokenidRaw === undefined || tokenidRaw === null) return null;
@@ -298,7 +278,7 @@ function createCardElement(nft) {
 
     const card = document.createElement("div");
     card.className = "nft-card";
-    card.id = `card-${tokenid}`; 
+    card.id = `card-${tokenid}`; // Kartı tapmaq üçün ID veririk
 
     let checkboxHTML = canManage ? `<input type="checkbox" class="select-box" data-id="${tokenid}">` : "";
 
@@ -382,6 +362,7 @@ function renderNFTs(list) {
     });
 }
 
+// Səhifəni yeniləmədən tək bir kartı yeniləmək üçün funksiya
 function refreshSingleCard(tokenid) {
     const nftData = allNFTs.find(n => n.tokenid == tokenid);
     if (!nftData) return;
@@ -390,7 +371,7 @@ function refreshSingleCard(tokenid) {
     const newCard = createCardElement(nftData);
 
     if (oldCard && newCard) {
-        oldCard.replaceWith(newCard); 
+        oldCard.replaceWith(newCard); // Köhnə kartı yenisi ilə əvəz edirik (Reloadsız)
     } else if (!oldCard && newCard) {
         marketplaceDiv.appendChild(newCard); 
     }
@@ -490,7 +471,7 @@ async function bulkListNFTs(tokenIds, priceInEth) {
         notify("İmza alındı! UI yenilənir...");
 
         // ====================================================
-        // RELOAD YERİNƏ LOCAL UPDATE
+        // RELOAD YERİNƏ LOCAL UPDATE (Səhifəni yeniləmirik)
         // ====================================================
         for (const order of signedOrders) {
             const offerItem = order.parameters.offer[0];
@@ -574,7 +555,7 @@ async function buyNFT(nftRecord) {
         await tx.wait();
         
         // ====================================================
-        // RELOAD YERİNƏ LOCAL UPDATE
+        // RELOAD YERİNƏ LOCAL UPDATE (Səhifəni yeniləmirik)
         // ====================================================
         
         // 1. Bazaya məlumat göndəririk
